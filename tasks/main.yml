@@ -1,0 +1,71 @@
+---
+# tasks file for role_generate_ca
+- name: Set relevant facts for execution
+  ansible.builtin.set_fact:
+    _ash_ca_key_path: "{{ playbook_dir + '/' + ash_ca_filename + '.key' }}"
+    _ash_ca_path: "{{ playbook_dir + '/' + ash_ca_filename + '.pem' }}"
+
+- name: Create private key with password protection
+  community.crypto.openssl_privatekey:
+    path: "{{ _ash_ca_key_path }}"
+    passphrase: "{{ ash_ca_key_passphrase }}"
+    cipher: "auto"
+
+- name: Create certificate signing request (CSR) for CA certificate
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ _ash_ca_key_path }}"
+    privatekey_passphrase: "{{ ash_ca_key_passphrase | default(omit, true) }}"
+    common_name: "{{ ash_ca_cn }}"
+    country_name: "{{ ash_ca_c }}"
+    locality_name: "{{ ash_ca_l }}"
+    organization_name: "{{ ash_ca_o }}"
+    organizational_unit_name: "{{ ash_ca_ou }}"
+    use_common_name_for_san: false
+    basic_constraints:
+      - 'CA:TRUE'
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+    key_usage_critical: true
+  register: _ca_csr
+
+- name: Create self-signed CA certificate from CSR
+  community.crypto.x509_certificate:
+    path: "{{ _ash_ca_path }}"
+    csr_content: "{{ _ca_csr.csr }}"
+    privatekey_path: "{{ _ash_ca_key_path }}"
+    privatekey_passphrase: "{{ ash_ca_key_passphrase | default(omit, true) }}"
+    provider: selfsigned
+
+- name: Ensure destination path exists
+  ansible.builtin.file:
+    state: directory
+    mode: "0755"
+    path: "{{ ash_ca_destination_path }}"
+
+- name: Bundle certs in archive
+  when: ash_create_archive
+  community.general.archive:
+    path:
+      - "{{ _ash_ca_path }}"
+      - "{{ _ash_ca_key_path }}"
+    dest: "{{ ash_ca_archive_path }}/{{ ash_ca_filename }}.tgz"
+    mode: "0755"
+
+- name: Copy files to destination path
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ ash_ca_destination_path }}"
+    mode: "0755"
+  loop:
+    - "{{ _ash_ca_path }}"
+    - "{{ _ash_ca_key_path }}"
+
+- name: Clean up temporary certs
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ _ash_ca_path }}"
+    - "{{ _ash_ca_key_path }}"
